@@ -1,0 +1,421 @@
+#include "Delta_Library.h"
+#define ENC0_IN1        48                       // Quadrature encoder1 A pin
+#define ENC0_IN2        49                       // Quadrature encoder1 B pin
+
+#define ENC1_IN1         50                       // Quadrature encoder2 A pin
+#define ENC1_IN2         51                       // Quadrature encoder2 B pin
+
+#define ENC2_IN1         52                       // Quadrature encoder3 A pin
+#define ENC2_IN2         53                       // Quadrature encoder3 B pin
+
+#define PWM1            6                       //PWM for Motor 1
+#define PWM2            7                      //PWM for Motor 2
+#define PWM3            8                      //PWM for Motor 3
+
+#define DIR1             3                       // Control rotated direction1
+#define DIR2             4                       // Control rotated direction2
+#define DIR3             5                       // Control rotated direction3
+
+#define ZM1              9                       // Detect status zeros of M1
+#define ZM2              10                       // Detect status zeros of M2
+#define ZM3              11                       // Detect status zeros of M3 
+
+#define LED1            13                      // Light up when STM1 is zero
+
+#define CURS0           A0
+#define CURS1           A1
+#define CURS2           A2
+
+////////////////////////////Encoder Variables///////////////////////////////////
+int last_enc[3] = {0,0,0}; // Here updated value of encoder store. violate int
+int   up_enc[3] = {0,0,0}; // Raw encoder value violate long
+int enc0[2],enc1[2],enc2[2];
+
+//////////////////////////////PID Parameter of three motors/////////////////////
+
+double kp_1 = 220 , ki_1 =0.00,  kd_1 = 10;             // modify for optimal performance ki_1 =0*0.002;kp1 = 28; kd = 2.5;  Kp = 220 ; kd = 15 
+double kp_2 = 220 , ki_2 = 0.00, kd_2 = 10 ;             // modify for optimal performance ki_2 = 0*0.002;kp2 = 28;kp = 160;kd 7.5 (4096)
+double kp_3 = 220 , ki_3 =0.00,  kd_3 = 10;             // modify for optimal performance ki_3 =0.002; kp3 = 27; 25->27;Kp = 24; Kd = 4.8;
+
+double pid1_p = 0, pid2_p = 0, pid3_p = 0; 
+double pid1_i = 0, pid2_i = 0, pid3_i = 0;
+double pid1_d = 0, pid2_d = 0, pid3_d = 0;
+
+double input_1 = 0, output_1 = 0,  error_1 = 0, pre_error_1 = 0;
+double input_2 = 0, output_2 = 0,  error_2 = 0, pre_error_2 = 0;
+double input_3 = 0, output_3 = 0,  error_3 = 0, pre_error_3 = 0;
+double uff[3]; int CTR[3];
+int  setpoint[3];
+////////////////////////////Offset Variables////////////////////////////////////
+long temp_1, temp_2, temp_3;
+boolean temp_zero1 = LOW, temp_zero2 = LOW, temp_zero3 = LOW;
+///////////////////Timer Counting Variables/////////////////////////////////////
+uint32_t timePrev, time_count = 0, sampletime1, elapsedTime;
+///////////////////STRING AND ARRAY FOR TRANSFERRING DATA///////////////////////
+const byte numChars = 20; //Limit length of received data
+//char receivedChars[numChars];           
+///////////////////BINARY AND ARRAY FOR TRANSFERRING DATA///////////////////////
+unsigned char receivedChars[numChars];
+
+
+boolean debug = true;
+
+boolean newData = false;            //Start program without any values, so need to receive values firstly
+
+boolean feedback = true;
+////////////////////////VARIABLES TO TEST CODE//////////////////////////////////
+unsigned int PWM4;
+////////////////////////VARIABLES FOR CURRENT//////////////////////////////////
+//Kalman Parameter
+int CURV[3] = {0,0,0}; int pin[3] = {A0,A1,A2};
+//Kalman Parameter
+float CUR0[3] = {0,0,0}; 
+float CUR1[3] = {0,0,0};
+float   P0[3] = {0,0,0},     P1[3] = {0,0,0};
+float   K0[3] = {0,0,0},     K1[3] = {0,0,0};
+float Qv = 0.00001, Rv = 1;
+DELTA delta_lib;
+PROCESS_data ProcessData;
+////////////////////////////SETUP PROGRAM///////////////////////////////////////
+void setup() {
+
+  SerialUSB.begin(115200);
+  //analogWriteResolution(10);
+  // Encoder Pin
+  pinMode(ENC0_IN1, INPUT_PULLUP);                  // quadrature encoder input A
+  pinMode(ENC0_IN2, INPUT_PULLUP);                  // quadrature encoder input B
+
+  pinMode(ENC1_IN1, INPUT_PULLUP);                  // quadrature encoder input A
+  pinMode(ENC1_IN2, INPUT_PULLUP);                  // quadrature encoder input B
+
+  pinMode(ENC2_IN1, INPUT_PULLUP);                  // quadrature encoder input A
+  pinMode(ENC2_IN2, INPUT_PULLUP);                  // quadrature encoder input B
+
+    /*Dat chan phat hien zero*/
+  pinMode(ZM1, INPUT_PULLUP);
+  pinMode(ZM2, INPUT_PULLUP);
+  pinMode(ZM3, INPUT_PULLUP);
+
+ //Dat chan output PWM
+  pinMode(PWM1, OUTPUT);
+  pinMode(PWM2, OUTPUT);
+  pinMode(PWM3, OUTPUT);
+
+  //Dat chan output DIR
+  pinMode(DIR1, OUTPUT);
+  pinMode(DIR2, OUTPUT);
+  pinMode(DIR3, OUTPUT);
+  
+  pinMode(LED1, OUTPUT);
+  //////////////////////////////Offset Delta Robot///////////////////
+  /*
+   while ((temp_zero1 == LOW) || (temp_zero2==LOW) ||(temp_zero3 == LOW)){
+    if (digitalRead(ZM1)==HIGH){
+      digitalWrite(DIR1,LOW);
+      analogWrite(PWM1,40);
+    }
+    else
+    {
+      analogWrite(PWM1,0);
+      temp_zero1 = HIGH;
+    }
+    if (digitalRead(ZM2)==HIGH){
+          digitalWrite(DIR2,LOW);
+          analogWrite(PWM2,40);
+    }
+    else
+    {
+      analogWrite(PWM2,0);
+      temp_zero2 = HIGH;
+    }
+    if (digitalRead(ZM3)==HIGH){
+          digitalWrite(DIR3,LOW);
+          analogWrite(PWM3,40);
+    }
+    else
+    {
+      analogWrite(PWM3,0);
+      temp_zero3 = HIGH;
+    }
+     //SerialUSB.print("chua zero");
+     //SerialUSB.print("     ");
+     //SerialUSB.print(temp_zero1);
+     //SerialUSB.print("     ");
+     //SerialUSB.print(temp_zero2);
+     //SerialUSB.print("     ");
+     //SerialUSB.println(temp_zero3);
+    
+  }
+  */
+  digitalWrite(LED1,HIGH);            //Light up when offset is ready*/
+  up_enc[0] = 0;
+  up_enc[1] = 0;
+  up_enc[2] = 0;                                    //encoderValue1 = 0, encoderValue2 = 0, encoderValue3 = 0;
+  digitalWrite(13,HIGH);
+  sendStartMessage();
+}
+
+void loop() {
+
+ 
+  timePrev = time_count;  // the previous time is stored before the actual time read
+  time_count = micros();  // actual time read
+  //sampletime1 = micros();
+  delta_lib.READ_Cur(CURV,pin);
+  //Kalman Calculation for current estimation
+  delta_lib.KalmanCur(CURV,P0,K0,CUR0,Qv, Rv);
+  delta_lib.Enc_update(enc0,up_enc[0],last_enc[0],ENC0_IN1,ENC0_IN2);
+  last_enc[0] = enc0[0]; up_enc[0]= enc0[1];
+  delta_lib.Enc_update(enc1,up_enc[1],last_enc[1],ENC1_IN1,ENC1_IN2);
+  last_enc[1] = enc1[0]; up_enc[1] = enc1[1];
+  delta_lib.Enc_update(enc2,up_enc[2],last_enc[2],ENC2_IN1,ENC2_IN2);
+  last_enc[2] = enc2[0]; up_enc[2] = enc2[1];  
+  if (SerialUSB.available()>0) 
+  {
+//////////STRING AND ARRAY TRANSFERRING DATA////////////////////////    
+    //recvWithStartEndMarkers();
+//////////BINARY AND ARRAY TRANSFERRING DATA////////////////////////
+    recvWithBytesBuffer();
+  }       //Neu co du lieu moi thi cap nhat du lieu
+  if (newData)
+  {
+    parseData();
+  }
+  //Timer for transmitting data
+  /*
+  if ((micros()-sampletime1) >=3500)
+  {
+    //if (debug){SerialUSB.write(receivedChars[0]);}
+    //else SerialUSB.write("<");
+    SerialUSB.write(60);
+    delta_lib.Send_to_PC(up_enc,setpoint,CUR0);
+    //delta_lib.Send_to_PC(up_enc,CTR,CUR0);
+    SerialUSB.write(62);
+    //delta_lib.Send_To_PCStr(up_enc,setpoint,CUR0);
+    sampletime1 =micros();
+  }
+  */
+  //SerialUSB.write('<');
+  //delta_lib.Send_to_PC(up_enc,setpoint,CUR0);
+  //SerialUSB.println();
+  //SerialUSB.write(256);
+  //analogWriteResolution(10);
+  
+  PIDcalculation();
+  //delay(100);
+   //Neu dang co du lieu moi thi su ly du lieu moi
+  
+  }
+/*********************
+* sends a start up message over SerialUSB.
+* Assumes SerialUSB is connected
+* 
+* Global:
+*       debug
+* Local:
+* 
+*/  
+void sendStartMessage1()
+{
+     SerialUSB.println(" "); 
+     SerialUSB.println("DeltaControl V1.0"); 
+     SerialUSB.println(" "); 
+     SerialUSB.println("DON = debug on"); 
+     SerialUSB.println("DOF = debug off"); 
+     SerialUSB.println("START to reset"); 
+     SerialUSB.println(" "); 
+ 
+     if (debug) { SerialUSB.println("Debug is on"); }
+           else { SerialUSB.println("Debug is off"); }
+    SerialUSB.println(" "); 
+}
+void sendStartMessage(){
+    delta_lib.Send_to_PC(up_enc,setpoint,CUR0);  
+}
+  
+  //sampletime1 = micros();
+  // put your main code here, to run repeatedly:
+
+///////////////////START CODE TRANSFER///////////////////////////////////
+
+void parseData()
+{ 
+   newData = false; 
+   //if (debug){SerialUSB.print(receivedChars[0]);}               //Xuat HELLO lan 1 hoac cac du lieu nhan duoc
+   
+   //if (debug){SerialUSB.write('<');}
+
+   if(receivedChars[0]=='H')
+   { 
+    //delta_lib.Send_To_PCStr(up_enc,setpoint,CUR0);
+    SerialUSB.print("HELLO");                              //Xuat HELLO lan 2 cho de bat timer 1
+    digitalWrite(13,LOW);
+    //delay(1000);
+    //digitalWrite(13,HIGH);
+    //delay(1000);
+   }
+
+   if(receivedChars[0]=='L')//ANG1
+    {// debug = false; 
+      if (receivedChars[1] == '2')   // UP
+              { 
+                  if ( receivedChars[2] == 'O'  && receivedChars[3] == 'N'  ) { digitalWrite(LED1,HIGH); }
+                  if ( receivedChars[2] == 'O'  && receivedChars[3] == 'F'  ) { digitalWrite(LED1,LOW); }
+              }
+      //delta_lib.Send_To_PCStr(up_enc,setpoint,CUR0);
+      //delay(100);
+    }
+   //if (receivedChars[0] =='C')
+   //{      
+   //delta_lib.Send_to_PC(up_enc,setpoint,CUR0);  
+   //delta_lib.Send_To_PCStr(up_enc,setpoint,CUR0);
+   
+  //}
+  ///////////////////////////END CODE TRANSFER////////////////////////////////
+
+   if (receivedChars[0]=='F')
+   {
+    //setpoint[0] = ProcessData.convertString2Number(receivedChars,1);
+    //setpoint[1] = ProcessData.convertString2Number(receivedChars,4);
+    //setpoint[2] = ProcessData.convertString2Number(receivedChars,7);
+    //uff[0] = ProcessData.convertString2MinusNumber(receivedChars,10);
+    //uff[1] = ProcessData.convertString2MinusNumber(receivedChars,13);
+    //uff[2] = ProcessData.convertString2MinusNumber(receivedChars,16);
+    setpoint[0] = ProcessData.convertByte2Number(receivedChars,1);
+    setpoint[1] = ProcessData.convertByte2Number(receivedChars,3);
+    setpoint[2] = ProcessData.convertByte2Number(receivedChars,5);
+    
+    uff[0] = ProcessData.convertByte2MinusNumber(receivedChars,7);
+    uff[1] = ProcessData.convertByte2MinusNumber(receivedChars,10);
+    uff[2] = ProcessData.convertByte2MinusNumber(receivedChars,13);
+    
+    SerialUSB.write(60);
+    delta_lib.Send_to_PC(up_enc,setpoint,CUR0);
+    //delta_lib.Send_to_PC(up_enc,CTR,CUR0);
+    SerialUSB.write(62);
+    SerialUSB.println();
+  }
+    
+}
+void PIDcalculation()
+{   
+
+  elapsedTime = (time_count - timePrev);     //doi sang 
+    //SerialUSB.println(time - timePrev);
+    //elapsedTime = 1;
+  input_1 = up_enc[0];
+  input_2 = up_enc[1];
+  input_3 = up_enc[2];
+////////Calcule errors of motors/////////////
+  error_1 = setpoint[0] - input_1;
+  error_2 = setpoint[1] - input_2;
+  error_3 = setpoint[2] - input_3;
+
+  //////////Calculate PID for motor1///////////////
+   pid1_p = kp_1*error_1;
+   pid1_i = pid1_i+(ki_1*error_1);
+   pid1_d = kd_1*(error_1 - pre_error_1)/elapsedTime;
+   output_1 =  pid1_p +pid1_i+pid1_d - uff[0];//
+//////////Calculate PID for motor2///////////////
+   pid2_p = kp_2*error_2;
+   pid2_i = pid2_i+(ki_2*error_2);
+   pid2_d = kd_2*(error_2-pre_error_2)/elapsedTime;
+   output_2 =   pid2_p + pid2_i+ pid2_d - uff[1];//
+   //////////Calculate PID for motor1///////////////
+   pid3_p = kp_3*error_3;
+   pid3_i = pid3_i+(ki_3 * error_3);
+   pid3_d = kd_1*(error_3-pre_error_3)/elapsedTime;
+   output_3 = pid3_p  + pid3_i+ pid3_d - uff[2];//
+   /////////////updating the error value////////////
+   pre_error_1 = error_1;
+   pre_error_2 = error_2;
+   pre_error_3 = error_3;
+   //uff[0] = uff[1] = uff[2] = 0;
+   //pwmOut1(output_1);
+   //pwmOut2(output_2);
+   //pwmOut3(output_3);
+   CTR[0] = output_1; CTR[1] = output_2; CTR[2] = output_3;
+   delta_lib.Pwm_out(DIR1,PWM1,output_1,12);
+   delta_lib.Pwm_out(DIR2,PWM2,output_2,12);
+   delta_lib.Pwm_out(DIR3,PWM3,output_3,12);
+
+}
+  
+/*void recvWithStartEndMarkers()      //Chuong trinh nhan chuoi du lieu co dieu kien ve ky tu bat dau va ket thuc
+{
+ 
+// function recvWithStartEndMarkers by Robin2 of the Arduino forums
+ 
+     static boolean recvInProgress = false;
+     static byte ndx = 0;
+     char startMarker = '<';
+     char endMarker = '>';
+ 
+     char rc;
+ 
+     while (SerialUSB.available() > 0) 
+     {
+          rc = SerialUSB.read();
+ 
+          if (recvInProgress == true) 
+          {
+               if (rc != endMarker)                                                     //Dieu kien nhan dien ket thuc chuoi
+               {
+                    receivedChars[ndx] = rc;
+                    ndx++;
+                    if (ndx >= numChars) { ndx = numChars - 1; }                        //Dieu kien so sanh voi kich thuoc chuoi
+               }
+               else 
+               {
+                     receivedChars[ndx] = '\0'; // terminate the string
+                     recvInProgress = false;
+                     ndx = 0;
+                     newData = true;
+               }
+          }
+ 
+          else if (rc == startMarker) { recvInProgress = true; }
+     }
+ 
+}*/
+void recvWithBytesBuffer() //Chuong trinh nhan chuoi du lieu co dieu kien ve ky tu bat dau va ket thuc
+{
+ 
+// function recvWithStartEndMarkers 
+ 
+     static boolean recvInProgress = false;
+     static byte ndx = 0;
+     unsigned char startMarker = '<';
+     //unsigned char endMarker = '>';
+    
+     byte rc;
+    
+    
+     while (SerialUSB.available() > 0) 
+     {
+         
+          rc = SerialUSB.read();
+          
+ 
+          if (recvInProgress == true) 
+          {
+               if ((receivedChars[ndx-1] + rc*256)!=65535)      //Dieu kien nhan dien ket thuc chuoi
+               //if (rc != endMarker) 
+               {    
+                    receivedChars[ndx] = rc;
+                    ndx++;
+                    if (ndx >= numChars) { ndx = numChars - 1; }                        //Dieu kien so sanh voi kich thuoc chuoi
+               }
+               else 
+               {
+                     receivedChars[ndx] = '\0'; // terminate the string
+                     recvInProgress = false;
+                     ndx = 0;
+                     newData = true;
+               }
+          }
+ 
+          else if (rc == startMarker) { recvInProgress = true; }
+     }
+ 
+}
