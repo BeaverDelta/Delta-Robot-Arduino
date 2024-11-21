@@ -1,0 +1,1 @@
+The codes are implemented into the Arduino Board. Based on the connection between the hardware and the Arduino Board. The user should program the suitable codes in another language program for control the robot.
